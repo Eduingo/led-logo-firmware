@@ -70,6 +70,30 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 #toast.show{transform:translate(-50%,0);opacity:1}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle;box-shadow:0 0 8px #22c55e}
 .dot.bad{background:#e11d48;box-shadow:0 0 8px #e11d48}
+.net{font-size:15px;line-height:1.45}
+.net a{color:var(--fg);font-weight:600}
+.net small{color:var(--mut);display:block;font-size:13px;margin-top:2px}
+.btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn{flex:1;min-width:130px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--fg);font:inherit;font-weight:600}
+.btn.pri{background:var(--c);border-color:var(--c);color:#fff}
+.btn:disabled{opacity:.5}
+.btn.ghost{background:none;color:var(--mut)}
+.nets{margin-top:12px;border-radius:14px;overflow:hidden;border:1px solid var(--line)}
+.nets:empty{display:none}
+.nets button{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border:none;border-bottom:1px solid var(--line);background:var(--card2);color:var(--fg);font:inherit;text-align:left}
+.nets button:last-child{border-bottom:none}
+.nets .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nets .lk{color:var(--mut);font-size:13px}
+.bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.bars i{width:4px;background:var(--line);border-radius:1px}
+.bars i.f{background:var(--fg)}
+.join{margin-top:12px;padding:14px;border-radius:14px;background:var(--card2);border:1px solid var(--line)}
+.join input[type=text],.join input[type=password]{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit;margin:6px 0 4px}
+.join .eye{font-size:13px;color:var(--mut);display:flex;align-items:center;gap:6px;margin-top:4px}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600;background:var(--line);color:var(--fg);text-transform:none;letter-spacing:0}
+.badge.ok{background:#14532d;color:#86efac}.badge.bad{background:#4c0519;color:#fda4af}.badge.wait{background:#422006;color:#fcd34d}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:rot .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes rot{to{transform:rotate(360deg)}}
 </style></head><body><main>
 <header><div class="brand"><div class="logo" id="logo">EDUINGO</div><small><span class="dot" id="dot"></span><span id="conn">Připojeno</span></small></div>
 <button class="pwr" id="pwr" aria-label="Zapnout / vypnout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/></svg></button></header>
@@ -89,6 +113,18 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 <label class="tg"><div><p>Pestrobarevný režim</p><small>Efekty použijí víc barev. Vypni, ať svítí jen zvolená barva.</small></div>
 <span class="swt"><input type="checkbox" id="palette"><i></i></span></label></div>
 <div class="hint">Tenhle efekt má vlastní barvy (duha), volba barvy se neprojeví.</div>
+</section>
+<section id="netBox"><h2>Domácí WiFi <span class="badge" id="netBadge">…</span></h2>
+<div class="net" id="netInfo"></div>
+<div class="btns"><button class="btn pri" id="scanBtn">Vyhledat sítě</button><button class="btn ghost" id="forgetBtn" hidden>Zapomenout síť</button></div>
+<div class="nets" id="nets"></div>
+<form class="join" id="joinF" hidden>
+<div class="lbl" id="ssidLbl">Název sítě</div><input type="text" id="ssidIn" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32">
+<div class="lbl">Heslo</div><input type="password" id="pwIn" autocomplete="current-password" maxlength="63">
+<label class="eye"><input type="checkbox" id="pwShow"> Zobrazit heslo</label>
+<div class="hint" style="display:block">Během připojování se spojení s logem může na pár sekund přerušit.</div>
+<div class="btns"><button class="btn pri" type="submit" id="joinBtn">Připojit</button><button class="btn ghost" type="button" id="joinCancel">Zrušit</button></div>
+</form>
 </section>
 <div id="toast">Logo neodpovídá, zkontroluj připojení k WiFi</div>
 </main><script>
@@ -166,5 +202,51 @@ pk.innerHTML='<input type="color" id="pickIn" aria-label="Vlastní barva"><span>
 $('pickIn').addEventListener('input',e=>send({color:e.target.value.slice(1)},150));
 function load(){fetch('/api/state').then(r=>r.json()).then(s=>{st=s;render();online(1)}).catch(()=>online(0))}
 load();setInterval(()=>{if(!document.hidden&&!Object.values(busy).some(Boolean))load()},5000);
+// ---- Domaci WiFi ----
+let wifi=null,scanTimer=null;
+const esc=t=>t.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function bars(r){const l=r>-55?4:r>-65?3:r>-75?2:1;return '<span class="bars">'+[6,9,12,14].map((h,i)=>`<i style="height:${h}px" class="${i<l?'f':''}"></i>`).join('')+'</span>'}
+const ST={none:['Nenastaveno',''],connected:['Připojeno','ok'],connecting:['Připojuji…','wait'],wrongpass:['Špatné heslo','bad'],notfound:['Síť nenalezena','bad']};
+function renderWifi(){
+ if(!wifi)return;const [t,c]=ST[wifi.status]||ST.none;const b=$('netBadge');b.textContent=t;b.className='badge '+c;
+ const n=esc(wifi.ssid);let h;
+ if(wifi.status==='connected')h=`Logo je připojené k síti <b>${n}</b>. Na domácí síti ho ovládáš na <a href="http://${wifi.host}/">${wifi.host}</a> nebo <a href="http://${wifi.ip}/">${wifi.ip}</a>.<small>Pokud logo.local nefunguje (některé Androidy), použij IP adresu.</small>`;
+ else if(wifi.status==='none')h=`Připoj logo k domácí WiFi a ovládej ho z mobilu nebo počítače bez přepínání sítí, na adrese <b>${wifi.host}</b>.<small>Logo umí jen sítě 2,4 GHz. Vlastní síť ${esc(wifi.ap)} zůstane zapnutá jako záloha.</small>`;
+ else if(wifi.status==='connecting')h=`Připojuji se k síti <b>${n}</b>…`;
+ else h=`K síti <b>${n}</b> se nepodařilo připojit (${t.toLowerCase()}). Vyhledej sítě a zkus to znovu.`;
+ $('netInfo').innerHTML=h;$('forgetBtn').hidden=wifi.status==='none';
+ $('scanBtn').textContent=wifi.status==='none'?'Vyhledat sítě':'Změnit síť';
+}
+function loadWifi(){return fetch('/api/wifi').then(r=>r.json()).then(w=>{wifi=w;renderWifi();return w}).catch(()=>{})}
+function scan(start){
+ const btn=$('scanBtn');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Hledám sítě…';$('joinF').hidden=true;
+ fetch('/api/scan'+(start?'?start=1':'')).then(r=>r.json()).then(d=>{
+  if(d.scanning){scanTimer=setTimeout(()=>scan(0),1200);return}
+  btn.disabled=false;renderWifi();
+  const L=$('nets');L.innerHTML='';
+  d.nets.forEach(x=>{const b=document.createElement('button');b.type='button';
+   b.innerHTML=`${bars(x.rssi)}<span class="n">${esc(x.ssid)}</span><span class="lk">${x.open?'otevřená':'🔒'}</span>`;
+   b.onclick=()=>pick(x.ssid,x.open);L.appendChild(b);});
+  const o=document.createElement('button');o.type='button';o.innerHTML='<span class="bars"></span><span class="n">Jiná (skrytá) síť…</span>';o.onclick=()=>pick('',false);L.appendChild(o);
+ }).catch(()=>{btn.disabled=false;renderWifi();online(0)});
+}
+function pick(ssid,open){vib();$('nets').innerHTML='';const f=$('joinF');f.hidden=false;
+ $('ssidIn').value=ssid;$('ssidIn').hidden=!!ssid;$('ssidLbl').innerHTML=ssid?'Síť <b>'+esc(ssid)+'</b>':'Název sítě';
+ $('pwIn').value='';$('pwIn').placeholder=open?'Síť je bez hesla':'';
+ (ssid?$('pwIn'):$('ssidIn')).focus();}
+$('scanBtn').onclick=()=>{vib();clearTimeout(scanTimer);scan(1)};
+$('joinCancel').onclick=()=>{$('joinF').hidden=true};
+$('pwShow').onchange=e=>$('pwIn').type=e.target.checked?'text':'password';
+$('forgetBtn').onclick=()=>{if(!confirm('Opravdu odpojit logo od domácí WiFi?'))return;
+ fetch('/api/wifi/forget',{method:'POST'}).then(r=>r.json()).then(w=>{wifi=w;renderWifi()})};
+$('joinF').onsubmit=e=>{e.preventDefault();const ssid=$('ssidIn').value.trim(),pass=$('pwIn').value;
+ if(!ssid)return;if(pass&&pass.length<8){alert('Heslo k WiFi má aspoň 8 znaků.');return}
+ const btn=$('joinBtn');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Ukládám…';
+ fetch('/api/wifi',{method:'POST',body:new URLSearchParams({ssid,pass})}).then(r=>{if(!r.ok)return r.text().then(t=>{throw t});return r.json()})
+  .then(w=>{wifi=w;wifi.status='connecting';renderWifi();$('joinF').hidden=true;
+   let n=0;const poll=()=>loadWifi().then(w=>{if(w&&w.status==='connecting'&&++n<15)setTimeout(poll,2000)});setTimeout(poll,2500);})
+  .catch(t=>alert(typeof t==='string'?t:'Nepodařilo se uložit, zkus to znovu.')).finally(()=>{btn.disabled=false;btn.textContent='Připojit'});
+};
+loadWifi();
 </script></body></html>
 )HTML";
