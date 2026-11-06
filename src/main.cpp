@@ -2,6 +2,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
 #include "settings.h"
+#include "led_positions.h"
 
 #define LED_PIN    4    // datovy pin pasku
 #define LED_COUNT  217  // pocet LED na pasku
@@ -110,7 +111,10 @@ Settings settings = {
     100,              // rychlost 100 % = puvodni casovani
     0x640A82,         // fialova (100, 10, 130)
     true,             // pestrobarevna paleta
+    0,                // automaticke stridani vypnuto
 };
+uint32_t sleepAt = 0;
+static uint32_t effectStart = 0;
 volatile bool effectRestart = false;
 
 static Preferences prefs;
@@ -126,6 +130,7 @@ void loadSettings() {
     settings.speed      = prefs.getUShort("speed", settings.speed);
     settings.color      = prefs.getULong("color", settings.color);
     settings.palette    = prefs.getBool("palette", settings.palette);
+    settings.autoCycle  = prefs.getUShort("auto", settings.autoCycle);
     prefs.end();
     if (settings.effect >= EFFECT_COUNT) settings.effect = 0;
     if (settings.brightness == 0) settings.brightness = 1;
@@ -139,16 +144,41 @@ void saveSettings() {
     prefs.putUShort("speed", settings.speed);
     prefs.putULong("color", settings.color);
     prefs.putBool("palette", settings.palette);
+    prefs.putUShort("auto", settings.autoCycle);
     prefs.end();
 }
 
 // Nahrada za delay(): ceka (podle nastavene rychlosti), mezitim obsluhuje web.
 // Vraci false, pokud se ma bezici efekt ukoncit (uzivatel zmenil efekt/barvu).
+void paintTick();
+
+// Automatika: casovac vypnuti a stridani efektu
+void automationTick() {
+    uint32_t now = millis();
+    if (sleepAt && (int32_t)(now - sleepAt) >= 0) {
+        sleepAt = 0;
+        settings.effect = EFFECT_OFF;
+        effectRestart = true;
+        return;
+    }
+    if (settings.autoCycle && settings.effect != EFFECT_OFF && settings.effect != 0 &&
+        settings.effect != EFFECT_PAINT &&
+        now - effectStart >= (uint32_t)settings.autoCycle * 1000) {
+        // dalsi efekt; preskocit "Celou show" (ta stridani dela sama) a "Vypnuto"
+        uint8_t e = settings.effect;
+        do { e = (e + 1) % EFFECT_COUNT; } while (e == 0 || e == EFFECT_OFF || e == EFFECT_PAINT);
+        settings.effect = e;
+        effectRestart = true;
+    }
+}
+
 bool waitMs(uint32_t ms) {
     uint32_t scaled = (uint32_t)((uint64_t)ms * 100 / settings.speed);
     uint32_t start = millis();
     do {
         webLoop();
+        automationTick();
+        paintTick();
         if (effectRestart) return false;
         delay(1);
     } while (millis() - start < scaled);
@@ -437,6 +467,171 @@ void fxOff() {
     WAIT(100);
 }
 
+
+// ---------------------------------------------------------------------------
+// Poloha LED v rovine: skutecny tvar loga z tabulky LED_POS (led_positions.h).
+// ledX = poloha zleva doprava prepoctena na 0..layoutW (pro efekty po sirce),
+// ledSeg = ke kteremu znaku LED patri (podle rucniho mapovani).
+// ---------------------------------------------------------------------------
+static int8_t ledX[LED_COUNT];   // -1 = LED neni v mapovani
+static int8_t ledSeg[LED_COUNT];
+static const uint8_t layoutW = 64;
+
+void buildLayout() {
+    memset(ledSeg, -1, sizeof(ledSeg));
+    for (size_t s = 0; s < SEG_CHARS; s++)
+        for (size_t i = 0; i < SEG_COLS && segments[s][i][0] != 0; i++)
+            for (size_t j = 0; j < SEG_ROWS && segments[s][i][j] != 0; j++) {
+                uint16_t led = segments[s][i][j] - 1;
+                if (led < LED_COUNT) ledSeg[led] = s;
+            }
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        bool known = ledSeg[i] >= 0 && LED_POS[i][0] != 0xFFFF;
+        ledX[i] = known ? (int8_t)((uint32_t)LED_POS[i][0] * (layoutW - 1) / LED_POS_W) : -1;
+    }
+}
+
+String layoutJson() {
+    String out;
+    out.reserve(LED_COUNT * 18);
+    out += "{\"w\":"; out += LED_POS_W; out += ",\"h\":"; out += LED_POS_H; out += ",\"leds\":[";
+    bool first = true;
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        if (ledX[i] < 0) continue;
+        if (!first) out += ",";
+        first = false;
+        out += "["; out += i; out += ","; out += LED_POS[i][0]; out += ","; out += LED_POS[i][1];
+        out += ","; out += ledSeg[i]; out += "]";
+    }
+    out += "]}";
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Malovani: vlastni obrazek namalovany stetcem ve webu (uklada se do flash)
+// ---------------------------------------------------------------------------
+static uint8_t paintBuf[LED_COUNT][3];
+static bool paintDirty = false;
+static uint32_t paintChanged = 0;
+
+void loadPaint() {
+    prefs.begin("paint", true);
+    if (prefs.getBytes("px", paintBuf, sizeof(paintBuf)) != sizeof(paintBuf))
+        memset(paintBuf, 0, sizeof(paintBuf));
+    prefs.end();
+}
+
+void paintSet(uint16_t led, uint32_t c) {
+    if (led >= LED_COUNT) return;
+    paintBuf[led][0] = c >> 16; paintBuf[led][1] = c >> 8; paintBuf[led][2] = c;
+    paintDirty = true;
+    paintChanged = millis();
+}
+
+void paintFill(uint32_t c) {
+    for (uint16_t i = 0; i < LED_COUNT; i++) paintSet(i, c);
+}
+
+// Ulozit obrazek az chvili po poslednim tahu stetcem (setri flash)
+void paintTick() {
+    if (paintDirty && millis() - paintChanged > 4000) {
+        paintDirty = false;
+        prefs.begin("paint", false);
+        prefs.putBytes("px", paintBuf, sizeof(paintBuf));
+        prefs.end();
+    }
+}
+
+void fxPaint() {
+    for (uint16_t i = 0; i < LED_COUNT; i++)
+        strip.setPixelColor(i, paintBuf[i][0], paintBuf[i][1], paintBuf[i][2]);
+    strip.show();
+    WAIT(30);
+}
+
+String ledsHex() {
+    static const char hex[] = "0123456789abcdef";
+    String out;
+    out.reserve(LED_COUNT * 6 + 1);
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        uint32_t c = strip.getPixelColor(i);
+        for (int sh = 20; sh >= 0; sh -= 4) out += hex[(c >> sh) & 0xF];
+    }
+    return out;
+}
+
+// Barva c s jasem k/255
+uint32_t scaleColor(uint32_t c, uint8_t k) {
+    return strip.Color(((c >> 16) & 0xFF) * k / 255, ((c >> 8) & 0xFF) * k / 255, (c & 0xFF) * k / 255);
+}
+
+// Duha, ktera se posouva zleva doprava pres cely napis
+void fxRainbowWave() {
+    for (uint16_t j = 0; j < 256; j++) {
+        for (uint16_t i = 0; i < LED_COUNT; i++) {
+            strip.setPixelColor(i, ledX[i] < 0 ? 0 : Wheel((ledX[i] * 256 / layoutW + 256 - j) & 255));
+        }
+        strip.show();
+        WAIT(20);
+    }
+}
+
+// Kometa: svetly sloupec s dohasinajicim ohonem jede pres napis
+void fxComet() {
+    const int tail = 8;
+    for (int head = 0; head < layoutW + tail; head++) {
+        for (uint16_t i = 0; i < LED_COUNT; i++) {
+            int d = head - ledX[i];
+            uint8_t k = (ledX[i] >= 0 && d >= 0 && d < tail) ? 255 - d * 255 / tail : 0;
+            uint32_t c = settings.palette ? Wheel((head * 4) & 255) : settings.color;
+            strip.setPixelColor(i, k ? scaleColor(c, k) : 0);
+        }
+        strip.show();
+        WAIT(30);
+    }
+    WAIT(300);
+}
+
+// Trpyt: nahodne LED se rozsviti a pomalu pohasnou
+void fxTwinkle() {
+    static uint8_t lvl[LED_COUNT];
+    static uint8_t col[LED_COUNT];
+    for (int frame = 0; frame < 200; frame++) {
+        for (int n = 0; n < 3; n++) {
+            uint16_t i = random(0, LED_COUNT);
+            lvl[i] = 255;
+            col[i] = random(0, PALETTE_SIZE);
+        }
+        for (uint16_t i = 0; i < LED_COUNT; i++) {
+            lvl[i] = lvl[i] * 7 / 8;
+            strip.setPixelColor(i, lvl[i] > 4 ? scaleColor(paletteColor(col[i]), lvl[i]) : 0);
+        }
+        strip.show();
+        WAIT(30);
+    }
+}
+
+// Majaky: leva a prava polovina napisu se strida (cervena / modra)
+void fxPolice() {
+    uint32_t left  = settings.palette ? 0xFF0000 : settings.color;
+    uint32_t right = settings.palette ? 0x0030FF : settings.color;
+    for (int side = 0; side < 2; side++) {
+        for (int flash = 0; flash < 3; flash++) {
+            for (uint16_t i = 0; i < LED_COUNT; i++) {
+                bool isLeft = ledX[i] >= 0 && ledX[i] < layoutW / 2;
+                bool isRight = ledX[i] >= layoutW / 2;
+                strip.setPixelColor(i, side == 0 ? (isLeft ? left : 0) : (isRight ? right : 0));
+            }
+            strip.show();
+            WAIT(60);
+            strip.clear();
+            strip.show();
+            WAIT(60);
+        }
+        WAIT(120);
+    }
+}
+
 // Poradi = cisla efektu ulozena v nastaveni; nove efekty pridavat na konec.
 const EffectInfo effects[] = {
     { "Celá show",           fxShow },
@@ -453,12 +648,21 @@ const EffectInfo effects[] = {
     { "Dýchání",             fxBreathe },
     { "Jedna barva",         fxSolid },
     { "Vypnuto",             fxOff },
+    { "Duhová vlna",         fxRainbowWave },
+    { "Kometa",              fxComet },
+    { "Třpyt",               fxTwinkle },
+    { "Majáky",              fxPolice },
+    { "Malování",            fxPaint },
 };
 const uint8_t EFFECT_COUNT = sizeof(effects) / sizeof(effects[0]);
+const uint8_t EFFECT_OFF = 13;   // index efektu "Vypnuto"
+const uint8_t EFFECT_PAINT = 18; // index efektu "Malování"
 
 void setup() {
     Serial.begin(115200);
     loadSettings();
+    loadPaint();
+    buildLayout();
 
     strip.begin();
     applyBrightness();
@@ -469,6 +673,8 @@ void setup() {
 
 void loop() {
     effectRestart = false;
+    static uint8_t lastEffect = 0xFF;
+    if (settings.effect != lastEffect) { lastEffect = settings.effect; effectStart = millis(); }
     effects[settings.effect].run();
     if (effectRestart) {
         // efekt byl prerusen -> zacit novy z cisteho stavu

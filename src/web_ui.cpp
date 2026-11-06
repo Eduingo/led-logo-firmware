@@ -55,6 +55,9 @@ static void sendState() {
     json += ",\"speed\":";    json += settings.speed;
     json += ",\"color\":\"";  json += color; json += "\"";
     json += ",\"palette\":";  json += settings.palette ? "true" : "false";
+    json += ",\"auto\":";     json += settings.autoCycle;
+    json += ",\"sleep\":";    json += sleepAt ? (int)((sleepAt - millis()) / 1000) : 0;
+    json += ",\"off\":";      json += EFFECT_OFF;
     json += ",\"effects\":[";
     for (uint8_t i = 0; i < EFFECT_COUNT; i++) {
         if (i) json += ",";
@@ -88,6 +91,15 @@ static void handleSet() {
     if (server.hasArg("palette")) {
         bool p = server.arg("palette").toInt() != 0;
         if (p != settings.palette) { settings.palette = p; restart = true; }
+    }
+
+    if (server.hasArg("auto")) {
+        settings.autoCycle = constrain(server.arg("auto").toInt(), 0, 3600);
+    }
+    if (server.hasArg("sleep")) {   // minuty, 0 = zrusit
+        long m = constrain(server.arg("sleep").toInt(), 0, 600);
+        sleepAt = m ? millis() + m * 60000UL : 0;
+        if (sleepAt == 0 && m) sleepAt = 1;
     }
 
     if (restart) effectRestart = true;
@@ -223,6 +235,34 @@ static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
     }
 }
 
+// Malovani: /api/paint?set=IDX:RRGGBB,IDX:RRGGBB...  nebo  ?fill=RRGGBB
+static void handlePaint() {
+    if (server.hasArg("fill")) {
+        paintFill(strtoul(server.arg("fill").c_str(), nullptr, 16) & 0xFFFFFF);
+    }
+    if (server.hasArg("set")) {
+        String buf = server.arg("set");   // kopie, at ukazatel zustane platny
+        const char *p = buf.c_str();
+        while (*p) {
+            char *end;
+            long led = strtol(p, &end, 10);
+            if (*end != ':') break;
+            uint32_t c = strtoul(end + 1, &end, 16) & 0xFFFFFF;
+            paintSet((uint16_t)led, c);
+            p = end;
+            if (*p == ',') p++;
+            else break;
+        }
+    }
+    if (settings.effect != EFFECT_PAINT) {
+        settings.effect = EFFECT_PAINT;
+        effectRestart = true;
+        saveDirty = true;
+        lastChange = millis();
+    }
+    server.send(200, "text/plain", "ok");
+}
+
 // Jakakoli jina adresa -> presmerovat na hlavni stranku (captive portal)
 static void handleNotFound() {
     // Pres AP (captive portal) presmerovat na IP loga, z domaci site jen na "/"
@@ -254,6 +294,12 @@ void webSetup() {
     server.on("/api/state", HTTP_GET, sendState);
     server.on("/api/set", HTTP_GET, handleSet);
     server.on("/api/wifi", HTTP_GET, sendWifi);
+    server.on("/api/paint", HTTP_GET, handlePaint);
+    server.on("/api/layout", HTTP_GET, []() { sendJson(layoutJson()); });
+    server.on("/api/leds", HTTP_GET, []() {
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(200, "text/plain", ledsHex());
+    });
     server.on("/api/wifi", HTTP_POST, handleWifiSave);
     server.on("/api/wifi/forget", HTTP_POST, handleWifiForget);
     server.on("/api/scan", HTTP_GET, handleScan);
