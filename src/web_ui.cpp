@@ -1,24 +1,49 @@
-// WiFi pristupovy bod (AP) + webove rozhrani pro ovladani efektu.
+// WiFi (vlastni AP + volitelne pripojeni k domaci siti) a webove rozhrani.
 //
-// Pripoj se telefonem k WiFi "Eduingo-Logo" (heslo nize) a otevri
-// http://192.168.4.1 (vetsina telefonu stranku otevre sama).
+// Logo vzdy vytvari vlastni WiFi "Eduingo-Logo" (ovladani na http://192.168.4.1).
+// Kdyz se v rozhrani nastavi domaci sit, logo se k ni navic pripoji a je
+// dostupne na http://logo.local (mDNS) nebo na IP adrese od routeru.
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ESPmDNS.h>
+#include <Preferences.h>
 #include "settings.h"
 #include "index_html.h"
 
-#define AP_SSID     "Eduingo-Logo"
-#define AP_PASSWORD "eduingo123"   // min. 8 znaku; "" = otevrena sit
-#define SAVE_DELAY_MS 3000         // ulozit do flash az chvili po posledni zmene
+#define AP_SSID       "Eduingo-Logo"
+#define AP_PASSWORD   "eduingo123"   // min. 8 znaku; "" = otevrena sit
+#define HOSTNAME      "logo"         // => http://logo.local
+#define SAVE_DELAY_MS 3000           // ulozit do flash az chvili po posledni zmene
 
 static WebServer server(80);
 static DNSServer dns;
 static bool saveDirty = false;
 static uint32_t lastChange = 0;
 
+// Domaci sit
+static String staSsid, staPass;
+static volatile uint8_t staLastReason = 0;   // duvod posledniho odpojeni (0 = zadny)
+static uint32_t connectAt = 0;               // kdy spustit pripojeni (po odeslani odpovedi)
+
+// Escapovani textu do JSON (nazvy siti muzou obsahovat cokoli)
+static void jsonStr(String &out, const String &s) {
+    out += '"';
+    for (size_t i = 0; i < s.length(); i++) {
+        char c = s[i];
+        if (c == '"' || c == '\\') { out += '\\'; out += c; }
+        else if ((uint8_t)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+        else out += c;
+    }
+    out += '"';
+}
+
+static void sendJson(const String &json) {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json; charset=utf-8", json);
+}
 
 static void sendState() {
     char color[8];
@@ -36,8 +61,7 @@ static void sendState() {
         json += "\""; json += effects[i].name; json += "\"";
     }
     json += "]}";
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "application/json; charset=utf-8", json);
+    sendJson(json);
 }
 
 static void handleSet() {
@@ -72,26 +96,167 @@ static void handleSet() {
     sendState();
 }
 
+// ---------------------------------------------------------------------------
+// Domaci WiFi
+// ---------------------------------------------------------------------------
+
+static void loadWifi() {
+    Preferences p;
+    p.begin("wifi", true);
+    staSsid = p.getString("ssid", "");
+    staPass = p.getString("pass", "");
+    p.end();
+}
+
+static void saveWifi() {
+    Preferences p;
+    p.begin("wifi", false);
+    p.putString("ssid", staSsid);
+    p.putString("pass", staPass);
+    p.end();
+}
+
+static void startSta() {
+    staLastReason = 0;
+    WiFi.disconnect(false, true);
+    if (staSsid.length()) {
+        WiFi.begin(staSsid.c_str(), staPass.c_str());
+        Serial.printf("Pripojuji se k \"%s\"...\n", staSsid.c_str());
+    }
+}
+
+static const char *staStatus() {
+    if (!staSsid.length()) return "none";
+    if (WiFi.status() == WL_CONNECTED) return "connected";
+    switch (staLastReason) {
+        case WIFI_REASON_AUTH_FAIL:
+        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+        case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        case WIFI_REASON_AUTH_EXPIRE:
+            return "wrongpass";
+        case WIFI_REASON_NO_AP_FOUND:
+            return "notfound";
+        default:
+            return "connecting";
+    }
+}
+
+static void sendWifi() {
+    String json;
+    json.reserve(200);
+    json += "{\"ssid\":";   jsonStr(json, staSsid);
+    json += ",\"status\":\""; json += staStatus(); json += "\"";
+    json += ",\"ip\":\"";   json += WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String(""); json += "\"";
+    json += ",\"rssi\":";   json += WiFi.status() == WL_CONNECTED ? (int)WiFi.RSSI() : 0;
+    json += ",\"host\":\"" HOSTNAME ".local\"";
+    json += ",\"ap\":";     jsonStr(json, String(AP_SSID));
+    json += "}";
+    sendJson(json);
+}
+
+// /api/scan?start=1 spusti hledani, dalsi volani /api/scan vrati vysledek
+static void handleScan() {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING) { sendJson("{\"scanning\":true}"); return; }
+    if (n < 0 || server.hasArg("start")) {
+        // Kdyz se logo prave neuspesne pripojuje, hledani by selhavalo ->
+        // pokusy na chvili zastavit a obnovit je pozdeji.
+        if (staSsid.length() && WiFi.status() != WL_CONNECTED) {
+            WiFi.disconnect(false, false);
+            connectAt = millis() + 20000;
+        }
+        WiFi.scanDelete();
+        WiFi.scanNetworks(true);
+        sendJson("{\"scanning\":true}");
+        return;
+    }
+    String json = "{\"scanning\":false,\"nets\":[";
+    int count = 0;
+    for (int i = 0; i < n && count < 25; i++) {
+        String ssid = WiFi.SSID(i);
+        if (!ssid.length()) continue;                 // skryte site
+        bool dup = false;                             // stejna sit z vice access pointu
+        for (int j = 0; j < i; j++) if (WiFi.SSID(j) == ssid) { dup = true; break; }
+        if (dup) continue;
+        if (count++) json += ",";
+        json += "{\"ssid\":"; jsonStr(json, ssid);
+        json += ",\"rssi\":"; json += (int)WiFi.RSSI(i);
+        json += ",\"open\":"; json += WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "true" : "false";
+        json += "}";
+    }
+    json += "]}";
+    WiFi.scanDelete();
+    sendJson(json);
+}
+
+static void handleWifiSave() {
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+    if (!ssid.length() || ssid.length() > 32 ||
+        (pass.length() && (pass.length() < 8 || pass.length() > 63))) {
+        server.send(400, "text/plain; charset=utf-8", "Neplatný název sítě nebo heslo");
+        return;
+    }
+    staSsid = ssid;
+    staPass = pass;
+    saveWifi();
+    sendWifi();
+    connectAt = millis() + 300;   // pripojit az po odeslani odpovedi
+}
+
+static void handleWifiForget() {
+    connectAt = 0;
+    staSsid = "";
+    staPass = "";
+    saveWifi();
+    WiFi.disconnect(false, true);
+    sendWifi();
+}
+
+static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+        staLastReason = 0;
+        Serial.printf("Pripojeno k domaci WiFi, IP %s, http://" HOSTNAME ".local/\n",
+                      WiFi.localIP().toString().c_str());
+    } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        staLastReason = info.wifi_sta_disconnected.reason;
+    }
+}
+
 // Jakakoli jina adresa -> presmerovat na hlavni stranku (captive portal)
 static void handleNotFound() {
-    server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+    // Pres AP (captive portal) presmerovat na IP loga, z domaci site jen na "/"
+    bool viaAp = server.client().localIP() == WiFi.softAPIP();
+    server.sendHeader("Location", viaAp ? String("http://") + WiFi.softAPIP().toString() + "/" : String("/"), true);
     server.send(302, "text/plain", "");
 }
 
 void webSetup() {
-    WiFi.mode(WIFI_AP);
+    loadWifi();
+    WiFi.persistent(false);          // prihlasovaci udaje si ukladame sami
+    WiFi.onEvent(onWifiEvent);
+    WiFi.setHostname(HOSTNAME);
+    WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(AP_SSID, AP_PASSWORD);
+    WiFi.setAutoReconnect(true);
     // LOLIN C3 mini ma znamy problem s antenou - nizsi vysilaci vykon
     // vyrazne zlepsuje stabilitu spojeni.
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
+    startSta();
+
     dns.start(53, "*", WiFi.softAPIP());
+    if (MDNS.begin(HOSTNAME)) MDNS.addService("http", "tcp", 80);
 
     server.on("/", HTTP_GET, []() {
         server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
     });
     server.on("/api/state", HTTP_GET, sendState);
     server.on("/api/set", HTTP_GET, handleSet);
+    server.on("/api/wifi", HTTP_GET, sendWifi);
+    server.on("/api/wifi", HTTP_POST, handleWifiSave);
+    server.on("/api/wifi/forget", HTTP_POST, handleWifiForget);
+    server.on("/api/scan", HTTP_GET, handleScan);
     server.onNotFound(handleNotFound);
     server.begin();
 
@@ -102,6 +267,11 @@ void webSetup() {
 void webLoop() {
     dns.processNextRequest();
     server.handleClient();
+
+    if (connectAt && (int32_t)(millis() - connectAt) >= 0) {
+        connectAt = 0;
+        startSta();
+    }
 
     if (saveDirty && millis() - lastChange > SAVE_DELAY_MS) {
         saveDirty = false;
