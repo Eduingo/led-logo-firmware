@@ -439,12 +439,12 @@ void fxOff() {
 
 // Poradi = cisla efektu ulozena v nastaveni; nove efekty pridavat na konec.
 const EffectInfo effects[] = {
-    { "Show (vše dokola)",   fxShow },
+    { "Celá show",           fxShow },
     { "Znaky postupně",      fxSegments },
     { "Jiskry",              fxSparkles },
     { "Sloupce",             fxColumns },
     { "EDU · IN · GO",       fxLetters },
-    { "Duha (plynulá)",      fxRainbowCycle },
+    { "Plynulá duha",        fxRainbowCycle },
     { "Duha",                fxRainbow },
     { "Barevná písmena",     fxLettersRainbow },
     { "Vlna barvy",          fxColorWipe },
