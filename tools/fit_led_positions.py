@@ -1,3 +1,8 @@
+# Pomocny skript (bezi na PC, ne na desce): z fotky rozsviceneho loga a z
+# mapovani v src/main.cpp dopocita polohy LED pro include/led_positions.h.
+# Ocekava fotku v photos/full.png a vychozi odhad poloh v pos.json; cesty
+# si uprav podle sebe. Potrebuje numpy, scipy a Pillow.
+
 import re,json,base64,numpy as np
 from PIL import Image,ImageDraw
 from scipy import ndimage
