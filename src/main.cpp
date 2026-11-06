@@ -1,27 +1,26 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#ifdef __AVR__
-  #include <avr/power.h>
-#endif
+#define LED_PIN    4    // datovy pin pasku
+#define LED_COUNT  217  // pocet LED na pasku
+// Pozor na odber: 217 LED na plnou bilou muze teoreticky brat az ~13 A.
+// Pokud zdroj nestaci (bliká, resetuje se ESP), sniz jas napr. na 80-120.
+#define BRIGHTNESS 255
 
-// Parameter 1 = number of pixels in strip
-// Parameter 2 = Arduino pin number (most are valid)
-// Parameter 3 = pixel type flags, add together as needed:
-//   NEO_KHZ800  800 KHz bitstream (most NeoPixel products w/WS2812 LEDs)
-//   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
-//   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
-//   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
-//   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(217, 4, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // IMPORTANT: To reduce NeoPixel burnout risk, add 1000 uF capacitor across
 // pixel power leads, add 300 - 500 Ohm resistor on first pixel's data input
 // and minimize distance between Arduino and first pixel.  Avoid connecting
 // on a live circuit...if you must, connect GND first.
 
-// [chars] [cols] [rows]
-uint16_t segments[8][20][8] = {
+// Rucni mapovani LED: [znak] [sloupec] [LED ve sloupci]
+// Cisla jsou 1-based (index na pasku = cislo - 1), 0 = konec sloupce/znaku.
+// const => tabulka se uklada do flash misto do RAM.
+#define SEG_CHARS 8
+#define SEG_COLS  20
+#define SEG_ROWS  8
+const uint16_t segments[SEG_CHARS][SEG_COLS][SEG_ROWS] = {
     // { 21, 20, 22, 19, 23, 18, 24, 8, 9, 17, 25, 7, 10, 16, 26, 6, 11, 15, 27, 5, 12, 14, 28, 4, 13, 29, 213, 3, 14, 30, 214, 212, 2, 15, 31, 215, 211, 1, 16, 216, 210, 0, 32, 209, 33, 208, 34 },
 
     { // Logo
@@ -107,95 +106,54 @@ void theaterChase(uint32_t c, uint8_t wait);
 void theaterChaseRainbow(uint8_t wait);
 uint32_t Wheel(byte WheelPos);
 
-// function to glowup specific column of pixels
-void glowupColumn(uint8_t column, uint32_t color, uint8_t wait);
-
+// Rozsviti zadany sloupec ve vsech znacich (znak po znaku, s pauzou)
 void glowupColumn(uint8_t column, uint32_t color, uint8_t wait) {
-    for (size_t s = 0; s < sizeof(segments) / sizeof(segments[0]); s++)
+    if (column >= SEG_COLS) return;
+    for (size_t s = 0; s < SEG_CHARS; s++)
     {
-        for (size_t i = 0; i < sizeof(segments[s]) / sizeof(segments[s][0]) && segments[s][i][0] != 0; i++)
+        if (segments[s][column][0] == 0) continue; // znak tento sloupec nema
+
+        for (size_t j = 0; j < SEG_ROWS && segments[s][column][j] != 0; j++)
         {
-            if (i == column)
-            {
-                for (size_t j = 0; j < sizeof(segments[s][i]) / sizeof(segments[s][i][0]) && segments[s][i][j] != 0; j++)
-                {
-                    strip.setPixelColor((uint16_t)segments[s][i][j] - 1, color);
-                }
-                strip.show();
-                delay(wait);
-            }
+            strip.setPixelColor(segments[s][column][j] - 1, color);
         }
+        strip.show();
+        delay(wait);
     }
 }
 
-// function to glowdown specific column of pixels
-void glowdownColumn(uint8_t column, uint8_t wait);
-
+// Zhasne zadany sloupec ve vsech znacich
 void glowdownColumn(uint8_t column, uint8_t wait) {
-    for (size_t s = 0; s < sizeof(segments) / sizeof(segments[0]); s++)
-    {
-        for (size_t i = 0; i < sizeof(segments[s]) / sizeof(segments[s][0]) && segments[s][i][0] != 0; i++)
-        {
-            if (i == column)
-            {
-                for (size_t j = 0; j < sizeof(segments[s][i]) / sizeof(segments[s][i][0]) && segments[s][i][j] != 0; j++)
-                {
-                    strip.setPixelColor((uint16_t)segments[s][i][j] - 1, 0); // Off
-                }
-                strip.show();
-                delay(wait);
-            }
-        }
-    }
+    glowupColumn(column, 0, wait);
 }
 
-// function to glowup entire segment
-void glowupSegment(uint8_t segment, uint32_t color, uint8_t wait);
-
+// Rozsviti cely znak sloupec po sloupci
 void glowupSegment(uint8_t segment, uint32_t color, uint8_t wait) {
-    for (size_t i = 0; i < sizeof(segments[segment]) / sizeof(segments[segment][0]) && segments[segment][i][0] != 0; i++)
+    if (segment >= SEG_CHARS) return;
+    for (size_t i = 0; i < SEG_COLS && segments[segment][i][0] != 0; i++)
     {
-        for (size_t j = 0; j < sizeof(segments[segment][i]) / sizeof(segments[segment][i][0]) && segments[segment][i][j] != 0; j++)
+        for (size_t j = 0; j < SEG_ROWS && segments[segment][i][j] != 0; j++)
         {
-            strip.setPixelColor((uint16_t)segments[segment][i][j] - 1, color);
+            strip.setPixelColor(segments[segment][i][j] - 1, color);
         }
         strip.show();
         delay(wait);
     }
 }
 
-// function to glowdown entire segment
-
-void glowdownSegment(uint8_t segment, uint8_t wait);
-
+// Zhasne cely znak sloupec po sloupci
 void glowdownSegment(uint8_t segment, uint8_t wait) {
-    for (size_t i = 0; i < sizeof(segments[segment]) / sizeof(segments[segment][0]) && segments[segment][i][0] != 0; i++)
-    {
-        for (size_t j = 0; j < sizeof(segments[segment][i]) / sizeof(segments[segment][i][0]) && segments[segment][i][j] != 0; j++)
-        {
-            strip.setPixelColor((uint16_t)segments[segment][i][j] - 1, 0); // Off
-        }
-        strip.show();
-        delay(wait);
-    }
+    glowupSegment(segment, 0, wait);
 }
 
 void setup() {
-    // This is for Trinket 5V 16MHz, you can remove these three lines if you are not using a Trinket
-    #if defined (__AVR_ATtiny85__)
-        if (F_CPU == 16000000) clock_prescale_set(clock_div_1);
-    #endif
-    // End of trinket special code
-
     strip.begin();
-    strip.setBrightness(255);
+    strip.setBrightness(BRIGHTNESS);
     strip.show(); // Initialize all pixels to 'off'
 }
 
 void loop() {
-    // Some example procedures showing how to display to the pixels:
-
-    uint32_t colors[] = {
+    const uint32_t colors[] = {
         strip.Color(255, 0, 0),   // Red
         strip.Color(0, 255, 0),   // Green
         strip.Color(0, 0, 255),   // Blue
@@ -219,6 +177,9 @@ void loop() {
     {
         glowdownSegment(s, 10);
     }
+    // LED c. 217 neni v mapovani, takze by po rainbowCycle zustala svitit -> zhasnout vse
+    strip.clear();
+    strip.show();
 
     // make random shines
     for (size_t i = 0; i < 25; i++)
@@ -240,16 +201,16 @@ void loop() {
         strip.show();
     }
 
-    // udělej efekt že se rozsvěcí sloupec po sloupci od dola nahoru
-    for (size_t col = 0; col < 20; col++)
+    // rozsviceni sloupec po sloupci
+    for (size_t col = 0; col < SEG_COLS; col++)
     {
         glowupColumn(col, c, 5);
     }
 
     delay(2000);
 
-    // udělej efekt že se zhasíná sloupec po sloupci od dola nahoru
-    for (size_t col = 0; col < 20; col++)
+    // zhasinani sloupec po sloupci
+    for (size_t col = 0; col < SEG_COLS; col++)
     {
         glowdownColumn(col, 5);
     }
@@ -258,13 +219,13 @@ void loop() {
     delay(1000);
 
     // Rozsvit pouze segmenty 1,2,3
-    glowupSegment(1, strip.Color(255, 0, 255),50); // E - Green
-    glowupSegment(2, strip.Color(255, 0, 255), 50); // D - Blue
-    glowupSegment(3, strip.Color(255, 0, 255), 50); // U - Blue
+    glowupSegment(1, strip.Color(255, 0, 255),50); // E
+    glowupSegment(2, strip.Color(255, 0, 255), 50); // D
+    glowupSegment(3, strip.Color(255, 0, 255), 50); // U
     delay(300);
     glowdownSegment(1, 50); // E
     glowdownSegment(2, 50); // D
-    glowdownSegment(3, 50); // D
+    glowdownSegment(3, 50); // U
     glowupSegment(4, strip.Color(0, 255, 255), 50); // I
     glowupSegment(5, strip.Color(0, 255, 255), 50); // N
     delay(300);
@@ -276,10 +237,10 @@ void loop() {
     glowupSegment(0, strip.Color(255, 255, 255), 50); // LOGO
 
     delay(100);
-    glowdownSegment(6, 50); // I
-    glowdownSegment(7, 50); // N
+    glowdownSegment(6, 50); // G
+    glowdownSegment(7, 50); // O
 
-    // glowup whole strip with rainbow cycle use for
+    // rozsvit vsechny znaky bile, pak duha
     for (size_t i = 1; i <= 7; i++)
     {
         glowupSegment(i, strip.Color(255, 255, 255), 20);
