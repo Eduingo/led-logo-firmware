@@ -95,7 +95,20 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:rot .8s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes rot{to{transform:rotate(360deg)}}
 .pv{position:relative;margin:0 0 14px;border-radius:var(--r);background:#07080b;border:1px solid var(--line);padding:30px 10px 8px;overflow:hidden}
-.pv canvas{display:block;width:100%;height:auto}
+.pv canvas{display:block;width:100%;height:auto;touch-action:pan-y}
+.pv.paint{border-color:var(--pc,var(--c));box-shadow:0 0 0 1px var(--pc,var(--c)) inset,0 10px 40px #000a}
+.pv.paint canvas{touch-action:none;cursor:crosshair}
+.pbtn{position:absolute;top:6px;right:8px;padding:6px 12px;border-radius:20px;border:1px solid var(--line);background:var(--card2);color:var(--fg);font:inherit;font-size:13px;font-weight:600;z-index:1}
+.pv.paint .pbtn{background:var(--c);border-color:var(--c);color:#fff}
+.pbar{padding:10px 4px 6px}
+.ptools{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px}
+.ptools button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--mut);font:inherit;font-size:12px;font-weight:600}
+.ptools button span{font-size:20px}
+.ptools button.on{color:var(--fg);border-color:var(--pc);box-shadow:0 0 0 1px var(--pc) inset}
+.pcols{display:grid;grid-template-columns:repeat(10,1fr);gap:6px}
+.pcols .sw.on{box-shadow:0 0 0 2px #07080b,0 0 0 4px var(--fg)}
+.phint{font-size:12px;color:var(--mut);margin:10px 2px 0;text-align:center}
+@media (orientation:landscape) and (max-height:600px){main{max-width:900px}}
 .pv .tag{position:absolute;top:10px;left:12px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:6px}
 .pv .tag i{width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 8px #ef4444;animation:breathe 1.6s infinite}
 .seg{display:flex;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
@@ -106,7 +119,13 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 </style></head><body><main>
 <header><div class="brand"><div class="logo" id="logo">EDUINGO</div><small><span class="dot" id="dot"></span><span id="conn">Připojeno</span></small></div>
 <button class="pwr" id="pwr" aria-label="Zapnout / vypnout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/></svg></button></header>
-<div class="pv" id="pv"><span class="tag"><i></i>Živě</span><canvas id="cv"></canvas></div>
+<div class="pv" id="pv"><span class="tag"><i></i>Živě</span><button class="pbtn" id="paintBtn">🖌️ Malovat</button><canvas id="cv"></canvas>
+<div class="pbar" id="pbar" hidden>
+<div class="ptools" id="ptools"></div>
+<div class="pcols" id="pcols"></div>
+<div class="btns"><button class="btn" id="pFill">Vyplnit vše</button><button class="btn ghost" id="pClear">Smazat vše</button></div>
+<p class="phint">Táhni prstem po logu. Na jemné malování otoč telefon na šířku.</p>
+</div></div>
 
 <section><h2>Efekt <b id="fxName"></b></h2><div class="fxd" id="fxDesc"></div><div class="fx" id="fx"></div></section>
 
@@ -166,7 +185,8 @@ const META=[
  {i:'🌀',d:'Duha jede přes celý nápis',s:1,a:'anim',g:1},
  {i:'☄️',d:'Světlá kometa s ohonem',c:1,s:1,p:1},
  {i:'🌟',d:'Jemné třpytky, které pohasínají',c:1,s:1,p:1},
- {i:'🚨',d:'Střídání levé a pravé půlky',c:1,s:1,p:1}
+ {i:'🚨',d:'Střídání levé a pravé půlky',c:1,s:1,p:1},
+ {i:'🖌️',d:'Tvůj vlastní obrázek – maluj nahoře v náhledu',paint:1}
 ];
 const SW=[['#ff0000','Červená'],['#ff6a00','Oranžová'],['#ffd000','Žlutá'],['#00ff40','Zelená'],['#00ffff','Tyrkysová'],['#0050ff','Modrá'],['#640a82','Fialová'],['#ff00a0','Růžová'],['#ffffff','Bílá']];
 const RB='linear-gradient(90deg,#f43f5e,#f59e0b,#22c55e,#06b6d4,#6366f1,#d946ef,#f43f5e)';
@@ -186,7 +206,7 @@ function render(){
  const fx=$('fx');
  if(fx.children.length!==st.effects.length){fx.innerHTML='';const ord=[...st.effects.keys()].filter(i=>i!==offIdx).concat(offIdx);ord.forEach(i=>{const n=st.effects[i];const mt=META[i]||{i:'💠',d:''};
   const b=document.createElement('button');b.innerHTML=`<span class="ic">${mt.i}</span><span class="nm"></span>`;
-  b.dataset.i=i;b.querySelector('.nm').textContent=n;b.onclick=()=>{vib();send({effect:i})};fx.appendChild(b);});}
+  b.dataset.i=i;b.querySelector('.nm').textContent=n;b.onclick=()=>{vib();if((META[i]||{}).paint){setPaint(true);window.scrollTo({top:0,behavior:'smooth'})}else send({effect:i})};fx.appendChild(b);});}
  [...fx.children].forEach(b=>b.classList.toggle('on',+b.dataset.i===st.effect));renderAuto();
  $('fxName').textContent=st.effects[st.effect];$('fxDesc').textContent=m.d||'';
  if(!busy.bri){$('bri').value=st.bri;$('briV').textContent=pct(st.bri)}
@@ -244,25 +264,55 @@ function renderAuto(){
 }
 setInterval(()=>{if(sleepEnd){if(Date.now()>sleepEnd){sleepEnd=0;sleepPick=0;load()}renderAuto()}},1000);
 
-// ---- Zivy nahled ----
-let lay=null,ctx=null,pvBusy=false;
-const cv=$('cv');
-function setupPv(){const W=cv.clientWidth,dpr=window.devicePixelRatio||1,cell=W/(lay.w+1),H=cell*(lay.h+1);
- cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);lay.cell=cell;}
-function draw(hex){if(!ctx)return;const c=lay.cell,r=c*.36;ctx.clearRect(0,0,cv.width,cv.height);
+// ---- Zivy nahled + malovani ----
+let lay=null,ctx=null,lastHex='',over={},painting=false,tool='brush',pcol='#ff00a0',queue={},qT=null;
+const cv=$('cv'),PAD=14,PAINT_FX=18;
+function setupPv(){const W=cv.clientWidth,dpr=window.devicePixelRatio||1,s=W/(lay.w+2*PAD),H=s*(lay.h+2*PAD);
+ cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);lay.s=s;draw(lastHex)}
+function draw(hex){if(!ctx)return;lastHex=hex;const s=lay.s,r=Math.max(2.2,7*s),now=Date.now();ctx.clearRect(0,0,cv.width,cv.height);
  ctx.globalCompositeOperation='lighter';
- for(const [i,x,y] of lay.leds){const v=hex.substr(i*6,6);const cx=(x+1)*c,cy=(y+1)*c;
-  if(v==='000000'||!v){ctx.fillStyle='#1a1d25';ctx.beginPath();ctx.arc(cx,cy,r*.8,0,7);ctx.fill();continue}
-  const n=parseInt(v,16),R=n>>16,G=n>>8&255,B=n&255,m=Math.max(R,G,B),k=255/m;
-  const col=`rgb(${R*k|0},${G*k|0},${B*k|0})`;
-  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,c*.95);g.addColorStop(0,`rgba(${R*k|0},${G*k|0},${B*k|0},${.55*m/255})`);g.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,c*.95,0,7);ctx.fill();
-  ctx.globalAlpha=.35+.65*m/255;ctx.fillStyle=col;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();ctx.globalAlpha=1;}
+ for(const [i,x,y] of lay.leds){let v=hex.substr(i*6,6);const o=over[i];if(o&&now-o.t<1500)v=o.c;
+  const cx=(x+PAD)*s,cy=(y+PAD)*s;
+  if(!v||v==='000000'){ctx.fillStyle='#1c2029';ctx.beginPath();ctx.arc(cx,cy,r*.75,0,7);ctx.fill();continue}
+  const n=parseInt(v,16),R=n>>16,G=n>>8&255,B=n&255,m=Math.max(R,G,B)||1,k=255/m,rgb=`${R*k|0},${G*k|0},${B*k|0}`;
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,r*2.6);g.addColorStop(0,`rgba(${rgb},${.5*m/255})`);g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,r*2.6,0,7);ctx.fill();
+  ctx.globalAlpha=.35+.65*m/255;ctx.fillStyle=`rgb(${rgb})`;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();ctx.globalAlpha=1;}
  ctx.globalCompositeOperation='source-over';}
 function pvLoop(){if(document.hidden||!lay){setTimeout(pvLoop,500);return}
- fetch('/api/leds').then(r=>r.text()).then(draw).catch(()=>{}).finally(()=>setTimeout(pvLoop,120));}
-fetch('/api/layout').then(r=>r.json()).then(l=>{const n={};l.leds.forEach(([i,x])=>n[x]=(n[x]||0)+1);l.leds=l.leds.map(([i,x,y])=>[i,x,y+(l.h-n[x])/2]);lay=l;setupPv();pvLoop()}).catch(()=>$('pv').hidden=true);
+ fetch('/api/leds').then(r=>r.text()).then(draw).catch(()=>{}).finally(()=>setTimeout(pvLoop,painting?200:120));}
+fetch('/api/layout').then(r=>r.json()).then(l=>{lay=l;setupPv();pvLoop()}).catch(()=>$('pv').hidden=true);
 window.addEventListener('resize',()=>lay&&setupPv());
+// --- stetec ---
+const TOOLS=[['brush','🖌️','Štětec'],['big','🟣','Velký'],['seg','🪣','Celý znak'],['erase','🧽','Guma']];
+TOOLS.forEach(([t,i,n])=>{const b=document.createElement('button');b.innerHTML=`<span>${i}</span>${n}`;b.dataset.t=t;b.onclick=()=>{vib();tool=t;renderPaint()};$('ptools').appendChild(b)});
+SW.forEach(([c,n])=>{const b=document.createElement('button');b.className='sw';b.dataset.c=c;b.style.setProperty('--s',c);b.title=n;b.onclick=()=>{vib();pcol=c;if(tool==='erase')tool='brush';renderPaint()};$('pcols').appendChild(b)});
+{const pk=document.createElement('label');pk.className='sw pick';pk.innerHTML='<input type="color" id="pcIn"><span>＋</span>';$('pcols').appendChild(pk);
+ $('pcIn').addEventListener('input',e=>{pcol=e.target.value;if(tool==='erase')tool='brush';renderPaint()})}
+function renderPaint(){[...$('ptools').children].forEach(b=>b.classList.toggle('on',b.dataset.t===tool));
+ [...$('pcols').children].forEach(b=>b.classList.toggle('on',b.dataset.c===pcol&&tool!=='erase'));$('pcIn').value=pcol;
+ $('pv').style.setProperty('--pc',tool==='erase'?'#555':pcol)}
+function setPaint(on){painting=on;$('pv').classList.toggle('paint',on);$('pbar').hidden=!on;$('paintBtn').textContent=on?'Hotovo':'🖌️ Malovat';
+ if(on){if(st&&st.color&&!SW.some(s=>s[0]===pcol))pcol=st.color.toLowerCase();renderPaint();fetch('/api/paint').catch(()=>{});if(st){st.effect=PAINT_FX;render()}}
+ setTimeout(()=>lay&&setupPv(),30)}
+$('paintBtn').onclick=()=>{vib();setPaint(!painting)};
+function flush(){qT=null;const e=Object.entries(queue);queue={};if(!e.length)return;
+ for(let k=0;k<e.length;k+=50)fetch('/api/paint?set='+e.slice(k,k+50).map(([i,c])=>i+':'+c).join(',')).catch(()=>online(0))}
+function put(i,c){over[i]={c,t:Date.now()};queue[i]=c;if(!qT)qT=setTimeout(flush,90)}
+function hit(ev){const b=cv.getBoundingClientRect(),s=lay.s,x=(ev.clientX-b.left)/s-PAD,y=(ev.clientY-b.top)/s-PAD;
+ const c=tool==='erase'?'000000':pcol.slice(1);let best=null,bd=1e9;
+ for(const L of lay.leds){const d=Math.hypot(L[1]-x,L[2]-y);if(d<bd){bd=d;best=L}
+  if(tool==='big'&&d<42)put(L[0],c);if(tool==='erase'&&d<26)put(L[0],c)}
+ if(!best||bd>40)return;
+ if(tool==='seg')lay.leds.filter(L=>L[3]===best[3]).forEach(L=>put(L[0],c));
+ else if(tool==='brush')put(best[0],c);
+ draw(lastHex)}
+let down=false;
+cv.addEventListener('pointerdown',e=>{if(!painting)return;down=true;cv.setPointerCapture(e.pointerId);hit(e);e.preventDefault()});
+cv.addEventListener('pointermove',e=>{if(painting&&down&&tool!=='seg')hit(e)});
+['pointerup','pointercancel'].forEach(t=>cv.addEventListener(t,()=>down=false));
+$('pFill').onclick=()=>{vib();const c=tool==='erase'?'000000':pcol.slice(1);lay.leds.forEach(L=>over[L[0]]={c,t:Date.now()});draw(lastHex);fetch('/api/paint?fill='+c)};
+$('pClear').onclick=()=>{if(!confirm('Smazat celý obrázek?'))return;vib();lay.leds.forEach(L=>over[L[0]]={c:'000000',t:Date.now()});draw(lastHex);fetch('/api/paint?fill=000000')};
 
 // ---- Domaci WiFi ----
 let wifi=null,scanTimer=null;

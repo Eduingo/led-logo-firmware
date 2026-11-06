@@ -20,9 +20,12 @@ i při špatném hesle nebo mimo domov. Síť jde kdykoli změnit nebo zapomenou
 
 ### Další funkce stránky
 
-- **Živý náhled** nahoře ukazuje skutečné barvy LED v reálném čase. LED jsou
-  seskupené po znacích a sloupcích podle ručního mapování, takže tvar je
-  jen přibližný.
+- **Živý náhled** nahoře ukazuje skutečné barvy LED v reálném čase ve tvaru
+  loga. Polohy LED jsou v `include/led_positions.h` (odvozené z fotky loga
+  a z ručního mapování; když LED na náhledu sedí jinde, stačí upravit tam).
+- **Malování**: tlačítko *Malovat* v náhledu zapne štětec. Malovat jde po
+  jedné LED, velkým štětcem, celý znak naráz nebo gumou; obrázek se uloží
+  a zůstane jako efekt *Malování*.
 - **Automatika**: střídání efektů po 10 s až 5 min a časovač vypnutí
   (15 min až 2 h).
 

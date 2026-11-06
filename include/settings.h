@@ -23,6 +23,11 @@ struct EffectInfo {
 extern const EffectInfo effects[];
 extern const uint8_t EFFECT_COUNT;
 extern const uint8_t EFFECT_OFF;
+extern const uint8_t EFFECT_PAINT;
+
+// Malovani stetcem
+void paintSet(uint16_t led, uint32_t color);
+void paintFill(uint32_t color);
 
 // Casovac vypnuti (0 = nebezi), hodnota millis(), kdy se logo vypne
 extern uint32_t sleepAt;

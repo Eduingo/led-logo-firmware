@@ -2,6 +2,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
 #include "settings.h"
+#include "led_positions.h"
 
 #define LED_PIN    4    // datovy pin pasku
 #define LED_COUNT  217  // pocet LED na pasku
@@ -149,6 +150,8 @@ void saveSettings() {
 
 // Nahrada za delay(): ceka (podle nastavene rychlosti), mezitim obsluhuje web.
 // Vraci false, pokud se ma bezici efekt ukoncit (uzivatel zmenil efekt/barvu).
+void paintTick();
+
 // Automatika: casovac vypnuti a stridani efektu
 void automationTick() {
     uint32_t now = millis();
@@ -159,10 +162,11 @@ void automationTick() {
         return;
     }
     if (settings.autoCycle && settings.effect != EFFECT_OFF && settings.effect != 0 &&
+        settings.effect != EFFECT_PAINT &&
         now - effectStart >= (uint32_t)settings.autoCycle * 1000) {
         // dalsi efekt; preskocit "Celou show" (ta stridani dela sama) a "Vypnuto"
         uint8_t e = settings.effect;
-        do { e = (e + 1) % EFFECT_COUNT; } while (e == 0 || e == EFFECT_OFF);
+        do { e = (e + 1) % EFFECT_COUNT; } while (e == 0 || e == EFFECT_OFF || e == EFFECT_PAINT);
         settings.effect = e;
         effectRestart = true;
     }
@@ -174,6 +178,7 @@ bool waitMs(uint32_t ms) {
     do {
         webLoop();
         automationTick();
+        paintTick();
         if (effectRestart) return false;
         delay(1);
     } while (millis() - start < scaled);
@@ -464,43 +469,84 @@ void fxOff() {
 
 
 // ---------------------------------------------------------------------------
-// Rozlozeni LED v rovine (odvozene z rucniho mapovani): x = sloupec napric
-// celym napisem (znaky vedle sebe, mezi nimi mezera), y = poradi ve sloupci.
+// Poloha LED v rovine: skutecny tvar loga z tabulky LED_POS (led_positions.h).
+// ledX = poloha zleva doprava prepoctena na 0..layoutW (pro efekty po sirce),
+// ledSeg = ke kteremu znaku LED patri (podle rucniho mapovani).
 // ---------------------------------------------------------------------------
 static int8_t ledX[LED_COUNT];   // -1 = LED neni v mapovani
-static int8_t ledY[LED_COUNT];
-static uint8_t layoutW = 1;      // pocet sloupcu celkem
+static int8_t ledSeg[LED_COUNT];
+static const uint8_t layoutW = 64;
 
 void buildLayout() {
-    memset(ledX, -1, sizeof(ledX));
-    memset(ledY, -1, sizeof(ledY));
-    uint8_t x = 0;
-    for (size_t s = 0; s < SEG_CHARS; s++) {
-        size_t i = 0;
-        for (; i < SEG_COLS && segments[s][i][0] != 0; i++) {
+    memset(ledSeg, -1, sizeof(ledSeg));
+    for (size_t s = 0; s < SEG_CHARS; s++)
+        for (size_t i = 0; i < SEG_COLS && segments[s][i][0] != 0; i++)
             for (size_t j = 0; j < SEG_ROWS && segments[s][i][j] != 0; j++) {
                 uint16_t led = segments[s][i][j] - 1;
-                if (led < LED_COUNT) { ledX[led] = x + i; ledY[led] = j; }
+                if (led < LED_COUNT) ledSeg[led] = s;
             }
-        }
-        x += i + 1;   // mezera mezi znaky
+    for (uint16_t i = 0; i < LED_COUNT; i++) {
+        bool known = ledSeg[i] >= 0 && LED_POS[i][0] != 0xFFFF;
+        ledX[i] = known ? (int8_t)((uint32_t)LED_POS[i][0] * (layoutW - 1) / LED_POS_W) : -1;
     }
-    layoutW = x > 1 ? x - 1 : 1;
 }
 
 String layoutJson() {
     String out;
-    out.reserve(LED_COUNT * 12);
-    out += "{\"w\":"; out += layoutW; out += ",\"h\":"; out += SEG_ROWS; out += ",\"leds\":[";
+    out.reserve(LED_COUNT * 18);
+    out += "{\"w\":"; out += LED_POS_W; out += ",\"h\":"; out += LED_POS_H; out += ",\"leds\":[";
     bool first = true;
     for (uint16_t i = 0; i < LED_COUNT; i++) {
         if (ledX[i] < 0) continue;
         if (!first) out += ",";
         first = false;
-        out += "["; out += i; out += ","; out += ledX[i]; out += ","; out += ledY[i]; out += "]";
+        out += "["; out += i; out += ","; out += LED_POS[i][0]; out += ","; out += LED_POS[i][1];
+        out += ","; out += ledSeg[i]; out += "]";
     }
     out += "]}";
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Malovani: vlastni obrazek namalovany stetcem ve webu (uklada se do flash)
+// ---------------------------------------------------------------------------
+static uint8_t paintBuf[LED_COUNT][3];
+static bool paintDirty = false;
+static uint32_t paintChanged = 0;
+
+void loadPaint() {
+    prefs.begin("paint", true);
+    if (prefs.getBytes("px", paintBuf, sizeof(paintBuf)) != sizeof(paintBuf))
+        memset(paintBuf, 0, sizeof(paintBuf));
+    prefs.end();
+}
+
+void paintSet(uint16_t led, uint32_t c) {
+    if (led >= LED_COUNT) return;
+    paintBuf[led][0] = c >> 16; paintBuf[led][1] = c >> 8; paintBuf[led][2] = c;
+    paintDirty = true;
+    paintChanged = millis();
+}
+
+void paintFill(uint32_t c) {
+    for (uint16_t i = 0; i < LED_COUNT; i++) paintSet(i, c);
+}
+
+// Ulozit obrazek az chvili po poslednim tahu stetcem (setri flash)
+void paintTick() {
+    if (paintDirty && millis() - paintChanged > 4000) {
+        paintDirty = false;
+        prefs.begin("paint", false);
+        prefs.putBytes("px", paintBuf, sizeof(paintBuf));
+        prefs.end();
+    }
+}
+
+void fxPaint() {
+    for (uint16_t i = 0; i < LED_COUNT; i++)
+        strip.setPixelColor(i, paintBuf[i][0], paintBuf[i][1], paintBuf[i][2]);
+    strip.show();
+    WAIT(30);
 }
 
 String ledsHex() {
@@ -606,13 +652,16 @@ const EffectInfo effects[] = {
     { "Kometa",              fxComet },
     { "Třpyt",               fxTwinkle },
     { "Majáky",              fxPolice },
+    { "Malování",            fxPaint },
 };
 const uint8_t EFFECT_COUNT = sizeof(effects) / sizeof(effects[0]);
 const uint8_t EFFECT_OFF = 13;   // index efektu "Vypnuto"
+const uint8_t EFFECT_PAINT = 18; // index efektu "Malování"
 
 void setup() {
     Serial.begin(115200);
     loadSettings();
+    loadPaint();
     buildLayout();
 
     strip.begin();
