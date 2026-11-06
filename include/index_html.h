@@ -94,9 +94,19 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 .badge.ok{background:#14532d;color:#86efac}.badge.bad{background:#4c0519;color:#fda4af}.badge.wait{background:#422006;color:#fcd34d}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:rot .8s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes rot{to{transform:rotate(360deg)}}
+.pv{position:relative;margin:0 0 14px;border-radius:var(--r);background:#07080b;border:1px solid var(--line);padding:30px 10px 8px;overflow:hidden}
+.pv canvas{display:block;width:100%;height:auto}
+.pv .tag{position:absolute;top:10px;left:12px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:6px}
+.pv .tag i{width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 8px #ef4444;animation:breathe 1.6s infinite}
+.seg{display:flex;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
+.seg button{flex:1;padding:9px 2px;border:none;border-radius:9px;background:none;color:var(--mut);font:inherit;font-size:14px;font-weight:600;white-space:nowrap}
+.seg button.on{background:var(--c);color:#fff}
+.sub{font-size:13px;color:var(--mut);margin:8px 0 16px}
+.sub:last-child{margin-bottom:0}
 </style></head><body><main>
 <header><div class="brand"><div class="logo" id="logo">EDUINGO</div><small><span class="dot" id="dot"></span><span id="conn">Připojeno</span></small></div>
 <button class="pwr" id="pwr" aria-label="Zapnout / vypnout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/></svg></button></header>
+<div class="pv" id="pv"><span class="tag"><i></i>Živě</span><canvas id="cv"></canvas></div>
 
 <section><h2>Efekt <b id="fxName"></b></h2><div class="fxd" id="fxDesc"></div><div class="fx" id="fx"></div></section>
 
@@ -113,6 +123,14 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;bac
 <label class="tg"><div><p>Pestrobarevný režim</p><small>Efekty použijí víc barev. Vypni, ať svítí jen zvolená barva.</small></div>
 <span class="swt"><input type="checkbox" id="palette"><i></i></span></label></div>
 <div class="hint">Tenhle efekt má vlastní barvy (duha), volba barvy se neprojeví.</div>
+</section>
+<section id="autoBox"><h2>Automatika</h2>
+<div class="lbl">Střídat efekty</div>
+<div class="seg" id="autoSeg"></div>
+<div class="sub" id="autoSub"></div>
+<div class="lbl">Vypnout za</div>
+<div class="seg" id="sleepSeg"></div>
+<div class="sub" id="sleepSub"></div>
 </section>
 <section id="netBox"><h2>Domácí WiFi <span class="badge" id="netBadge">…</span></h2>
 <div class="net" id="netInfo"></div>
@@ -144,7 +162,11 @@ const META=[
  {i:'🎠',d:'Běžící světla v duze',s:1,a:'anim',g:1},
  {i:'🫧',d:'Pomalé dýchání barvou',c:1,s:1,a:'pulse'},
  {i:'💡',d:'Svítí jednou barvou',c:1},
- {i:'⏻',d:'Všechny LED zhasnuté',off:1}
+ {i:'⏻',d:'Všechny LED zhasnuté',off:1},
+ {i:'🌀',d:'Duha jede přes celý nápis',s:1,a:'anim',g:1},
+ {i:'☄️',d:'Světlá kometa s ohonem',c:1,s:1,p:1},
+ {i:'🌟',d:'Jemné třpytky, které pohasínají',c:1,s:1,p:1},
+ {i:'🚨',d:'Střídání levé a pravé půlky',c:1,s:1,p:1}
 ];
 const SW=[['#ff0000','Červená'],['#ff6a00','Oranžová'],['#ffd000','Žlutá'],['#00ff40','Zelená'],['#00ffff','Tyrkysová'],['#0050ff','Modrá'],['#640a82','Fialová'],['#ff00a0','Růžová'],['#ffffff','Bílá']];
 const RB='linear-gradient(90deg,#f43f5e,#f59e0b,#22c55e,#06b6d4,#6366f1,#d946ef,#f43f5e)';
@@ -158,14 +180,14 @@ function setAccent(c){
  document.documentElement.style.setProperty('--c',`rgb(${Math.min(255,r*k)|0},${Math.min(255,g*k)|0},${Math.min(255,b*k)|0})`);
 }
 function render(){
- offIdx=st.effects.length-1;
+ offIdx=st.off??st.effects.length-1;
  const m=META[st.effect]||{c:1,s:1};
  if(st.effect!==offIdx)lastOn=st.effect;
  const fx=$('fx');
- if(fx.children.length!==st.effects.length){fx.innerHTML='';st.effects.forEach((n,i)=>{const mt=META[i]||{i:'💠',d:''};
+ if(fx.children.length!==st.effects.length){fx.innerHTML='';const ord=[...st.effects.keys()].filter(i=>i!==offIdx).concat(offIdx);ord.forEach(i=>{const n=st.effects[i];const mt=META[i]||{i:'💠',d:''};
   const b=document.createElement('button');b.innerHTML=`<span class="ic">${mt.i}</span><span class="nm"></span>`;
-  b.querySelector('.nm').textContent=n;b.onclick=()=>{vib();send({effect:i})};fx.appendChild(b);});}
- [...fx.children].forEach((b,i)=>b.classList.toggle('on',i===st.effect));
+  b.dataset.i=i;b.querySelector('.nm').textContent=n;b.onclick=()=>{vib();send({effect:i})};fx.appendChild(b);});}
+ [...fx.children].forEach(b=>b.classList.toggle('on',+b.dataset.i===st.effect));renderAuto();
  $('fxName').textContent=st.effects[st.effect];$('fxDesc').textContent=m.d||'';
  if(!busy.bri){$('bri').value=st.bri;$('briV').textContent=pct(st.bri)}
  if(!busy.speed){$('speed').value=st.speed;$('spdV').textContent=spd(st.speed)}
@@ -202,6 +224,46 @@ pk.innerHTML='<input type="color" id="pickIn" aria-label="Vlastní barva"><span>
 $('pickIn').addEventListener('input',e=>send({color:e.target.value.slice(1)},150));
 function load(){fetch('/api/state').then(r=>r.json()).then(s=>{st=s;render();online(1)}).catch(()=>online(0))}
 load();setInterval(()=>{if(!document.hidden&&!Object.values(busy).some(Boolean))load()},5000);
+// ---- Automatika ----
+const AUTO=[[0,'Vyp'],[10,'10 s'],[30,'30 s'],[60,'1 min'],[300,'5 min']];
+const SLEEP=[[0,'Vyp'],[15,'15 min'],[30,'30 min'],[60,'1 h'],[120,'2 h']];
+let sleepEnd=0,sleepPick=0;
+function segs(el,opts,fn){opts.forEach(([v,t])=>{const b=document.createElement('button');b.textContent=t;b.dataset.v=v;b.onclick=()=>{vib();fn(v)};el.appendChild(b)})}
+segs($('autoSeg'),AUTO,v=>send({auto:v}));
+segs($('sleepSeg'),SLEEP,v=>{sleepPick=v;sleepEnd=v?Date.now()+v*60000:0;send({sleep:v});renderAuto()});
+function fmtT(s){const m=Math.floor(s/60);return m>=60?Math.floor(m/60)+' h '+(m%60)+' min':m>0?m+' min '+(s%60)+' s':s+' s'}
+function renderAuto(){
+ if(!st)return;
+ [...$('autoSeg').children].forEach(b=>b.classList.toggle('on',+b.dataset.v===st.auto));
+ $('autoSub').textContent=st.auto?`Každých ${AUTO.find(a=>a[0]===st.auto)?.[1]||st.auto+' s'} se přepne na další efekt.`:'Logo zůstává na zvoleném efektu.';
+ if(st.sleep>0&&!sleepEnd)sleepEnd=Date.now()+st.sleep*1000;
+ if(!st.sleep&&!sleepPick)sleepEnd=0;
+ const left=sleepEnd?Math.max(0,Math.round((sleepEnd-Date.now())/1000)):0;
+ [...$('sleepSeg').children].forEach(b=>b.classList.toggle('on',left?+b.dataset.v===sleepPick:+b.dataset.v===0));
+ $('sleepSub').textContent=left?'Logo zhasne za '+fmtT(left)+'.':'Časovač neběží.';
+}
+setInterval(()=>{if(sleepEnd){if(Date.now()>sleepEnd){sleepEnd=0;sleepPick=0;load()}renderAuto()}},1000);
+
+// ---- Zivy nahled ----
+let lay=null,ctx=null,pvBusy=false;
+const cv=$('cv');
+function setupPv(){const W=cv.clientWidth,dpr=window.devicePixelRatio||1,cell=W/(lay.w+1),H=cell*(lay.h+1);
+ cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);lay.cell=cell;}
+function draw(hex){if(!ctx)return;const c=lay.cell,r=c*.36;ctx.clearRect(0,0,cv.width,cv.height);
+ ctx.globalCompositeOperation='lighter';
+ for(const [i,x,y] of lay.leds){const v=hex.substr(i*6,6);const cx=(x+1)*c,cy=(y+1)*c;
+  if(v==='000000'||!v){ctx.fillStyle='#1a1d25';ctx.beginPath();ctx.arc(cx,cy,r*.8,0,7);ctx.fill();continue}
+  const n=parseInt(v,16),R=n>>16,G=n>>8&255,B=n&255,m=Math.max(R,G,B),k=255/m;
+  const col=`rgb(${R*k|0},${G*k|0},${B*k|0})`;
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,c*.95);g.addColorStop(0,`rgba(${R*k|0},${G*k|0},${B*k|0},${.55*m/255})`);g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,c*.95,0,7);ctx.fill();
+  ctx.globalAlpha=.35+.65*m/255;ctx.fillStyle=col;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();ctx.globalAlpha=1;}
+ ctx.globalCompositeOperation='source-over';}
+function pvLoop(){if(document.hidden||!lay){setTimeout(pvLoop,500);return}
+ fetch('/api/leds').then(r=>r.text()).then(draw).catch(()=>{}).finally(()=>setTimeout(pvLoop,120));}
+fetch('/api/layout').then(r=>r.json()).then(l=>{const n={};l.leds.forEach(([i,x])=>n[x]=(n[x]||0)+1);l.leds=l.leds.map(([i,x,y])=>[i,x,y+(l.h-n[x])/2]);lay=l;setupPv();pvLoop()}).catch(()=>$('pv').hidden=true);
+window.addEventListener('resize',()=>lay&&setupPv());
+
 // ---- Domaci WiFi ----
 let wifi=null,scanTimer=null;
 const esc=t=>t.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

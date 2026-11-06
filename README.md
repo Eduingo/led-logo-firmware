@@ -18,6 +18,14 @@ v domácí síti na **http://logo.local** (nebo na IP adrese, kterou stránka uk
 Vlastní síť Eduingo-Logo zůstává zapnutá jako záloha, takže se k logu dostaneš
 i při špatném hesle nebo mimo domov. Síť jde kdykoli změnit nebo zapomenout.
 
+### Další funkce stránky
+
+- **Živý náhled** nahoře ukazuje skutečné barvy LED v reálném čase. LED jsou
+  seskupené po znacích a sloupcích podle ručního mapování, takže tvar je
+  jen přibližný.
+- **Automatika**: střídání efektů po 10 s až 5 min a časovač vypnutí
+  (15 min až 2 h).
+
 Nastavení se ukládá do flash (asi 3 s po poslední změně), takže po vypnutí
 a zapnutí logo pokračuje stejným efektem.
 
